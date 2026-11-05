@@ -7,75 +7,23 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Generate Project Structure & Source Files
+      - name: Buat File Java & Manifest
         run: |
-          mkdir -p app/src/main/java/com/jossmodz/esp
+          mkdir -p src/com/jossmodz/esp
+          mkdir -p build/classes
+          mkdir -p build/dex
+          mkdir -p dist
 
-          cat << 'EOF' > settings.gradle
-          rootProject.name = "EspFreezeModule"
-          include ':app'
-          EOF
-
-          cat << 'EOF' > build.gradle
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.1.0'
-              }
-          }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          EOF
-
-          cat << 'EOF' > app/build.gradle
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              namespace 'com.jossmodz.esp'
-              compileSdk 33
-
-              defaultConfig {
-                  applicationId "com.jossmodz.esp"
-                  minSdk 24
-                  targetSdk 33
-                  versionCode 1
-                  versionName "1.0"
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_1_8
-                  targetCompatibility JavaVersion.VERSION_1_8
-              }
-          }
-          EOF
-
-          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          cat << 'EOF' > AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.jossmodz.esp"
+              android:versionCode="1"
+              android:versionName="1.0">
+              <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="33" />
               <application
                   android:label="EspFreezeModule"
                   android:hasCode="true">
@@ -83,7 +31,7 @@ jobs:
           </manifest>
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/jossmodz/esp/NetworkLog.java
+          cat << 'EOF' > src/com/jossmodz/esp/NetworkLog.java
           package com.jossmodz.esp;
 
           import android.util.Log;
@@ -100,7 +48,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/jossmodz/esp/EspEntityStore.java
+          cat << 'EOF' > src/com/jossmodz/esp/EspEntityStore.java
           package com.jossmodz.esp;
 
           import android.os.SystemClock;
@@ -681,7 +629,7 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > app/src/main/java/com/jossmodz/esp/FreezeController.java
+          cat << 'EOF' > src/com/jossmodz/esp/FreezeController.java
           package com.jossmodz.esp;
 
           import android.os.SystemClock;
@@ -956,12 +904,51 @@ jobs:
           }
           EOF
 
-      - name: Build Debug APK with Gradle
-        uses: gradle/actions/setup-gradle@v3
-      - run: gradle assembleDebug
+      - name: Compile Java ke DEX & Bungkus APK
+        run: |
+          # Cari versi Build-Tools dan Platform SDK terbaru yang terpasang di Ubuntu runner
+          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          PLATFORM=$(ls -d $ANDROID_HOME/platforms/android-* | sort -V | tail -n 1)
 
-      - name: Upload Compiled APK
+          echo "Menggunakan Build-Tools: $BUILD_TOOLS"
+          echo "Menggunakan Platform: $PLATFORM"
+
+          # 1. Compile kode Java menjadi .class
+          javac -source 1.8 -target 1.8 \
+            -bootclasspath "$PLATFORM/android.jar" \
+            -d build/classes \
+            src/com/jossmodz/esp/NetworkLog.java \
+            src/com/jossmodz/esp/EspEntityStore.java \
+            src/com/jossmodz/esp/FreezeController.java
+
+          # 2. Konversi file .class menjadi classes.dex menggunakan d8
+          find build/classes -name "*.class" > classes.txt
+          "$BUILD_TOOLS/d8" --lib "$PLATFORM/android.jar" --output build/dex @classes.txt
+
+          # 3. Buat kerangka APK dari AndroidManifest.xml menggunakan aapt2
+          "$BUILD_TOOLS/aapt2" link -o build/unsigned.apk \
+            -I "$PLATFORM/android.jar" \
+            --manifest AndroidManifest.xml
+
+          # 4. Masukkan classes.dex ke dalam APK
+          cp build/dex/classes.dex .
+          zip -uj build/unsigned.apk classes.dex
+
+          # 5. Zipalign dan Sign APK agar valid di Android
+          "$BUILD_TOOLS/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
+
+          keytool -genkey -v -keystore debug.keystore -storepass android \
+            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          "$BUILD_TOOLS/apksigner" sign --ks debug.keystore \
+            --ks-pass pass:android --key-pass pass:android \
+            --out dist/EspFreezeModule.apk build/aligned.apk
+
+          cp build/dex/classes.dex dist/classes.dex
+
+      - name: Upload Hasil APK & DEX
         uses: actions/upload-artifact@v4
         with:
-          name: EspFreezeModule-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: EspFreezeModule-Output
+          path: dist/
