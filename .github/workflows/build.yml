@@ -57,7 +57,6 @@ jobs:
           import java.util.Map;
           import java.util.concurrent.ConcurrentHashMap;
           import java.util.function.BiFunction;
-          import java.util.function.Predicate;
 
           public final class EspEntityStore {
 
@@ -143,22 +142,10 @@ jobs:
                               false
                       );
 
-                      this.entities.entrySet().removeIf(new Predicate>() {
-                          @Override
-                          public boolean test(Map.Entry<Integer, Entity> entry) {
-                              return EspEntityStore.lambda$updateLocal$0(f, f3, entry);
-                          }
-                      });
+                      this.entities.entrySet().removeIf(entry -> 
+                          horizontalDistance(entry.getValue().f214x, entry.getValue().f216z, f, f3) < 0.35f
+                      );
                   }
-              }
-
-              static boolean lambda$updateLocal$0(float f, float f2, Map.Entry<Integer, Entity> entry) {
-                  return horizontalDistance(
-                          entry.getValue().f214x,
-                          entry.getValue().f216z,
-                          f,
-                          f2
-                  ) < 0.35f;
               }
 
               public int localEntityId() {
@@ -193,16 +180,7 @@ jobs:
                       return;
                   }
 
-                  this.entities.computeIfPresent(Integer.valueOf(i), new BiFunction<Integer, Entity, Entity>() {
-                      @Override
-                      public Entity apply(Integer obj, Entity obj2) {
-                          return EspEntityStore.lambda$updateName$1(str, obj, obj2);
-                      }
-                  });
-              }
-
-              static Entity lambda$updateName$1(String str, Integer num, Entity entity) {
-                  return new Entity(
+                  this.entities.computeIfPresent(Integer.valueOf(i), (num, entity) -> new Entity(
                           entity.f210id,
                           entity.f214x,
                           entity.f215y,
@@ -215,11 +193,15 @@ jobs:
                           entity.health,
                           entity.team,
                           entity.dead
-                  );
+                  ));
               }
 
-              static Entity lambda$updateTeam$2(int i, Integer num, Entity entity) {
-                  return new Entity(
+              public void updateTeam(int i, final int i2) {
+                  if (i <= 0) {
+                      return;
+                  }
+
+                  this.entities.computeIfPresent(Integer.valueOf(i), (num, entity) -> new Entity(
                           entity.f210id,
                           entity.f214x,
                           entity.f215y,
@@ -230,22 +212,9 @@ jobs:
                           entity.updatedAt,
                           entity.name,
                           entity.health,
-                          i,
+                          i2,
                           entity.dead
-                  );
-              }
-
-              public void updateTeam(int i, final int i2) {
-                  if (i <= 0) {
-                      return;
-                  }
-
-                  this.entities.computeIfPresent(Integer.valueOf(i), new BiFunction<Integer, Entity, Entity>() {
-                      @Override
-                      public Entity apply(Integer obj, Entity obj2) {
-                          return EspEntityStore.lambda$updateTeam$2(i2, obj, obj2);
-                      }
-                  });
+                  ));
               }
 
               public void applyDamage(int i, final int i2) {
@@ -253,36 +222,24 @@ jobs:
                       return;
                   }
 
-                  this.entities.computeIfPresent(Integer.valueOf(i), new BiFunction<Integer, Entity, Entity>() {
-                      @Override
-                      public Entity apply(Integer obj, Entity obj2) {
-                          return EspEntityStore.lambda$applyDamage$3(i2, obj, obj2);
-                      }
+                  this.entities.computeIfPresent(Integer.valueOf(i), (num, entity) -> {
+                      int iMax = Math.max(0, entity.health - Math.min(DEFAULT_MAX_HEALTH, i2));
+                      boolean z = iMax == 0;
+                      return new Entity(
+                              entity.f210id,
+                              entity.f214x,
+                              entity.f215y,
+                              entity.f216z,
+                              entity.f211vx,
+                              entity.f212vy,
+                              entity.f213vz,
+                              entity.updatedAt,
+                              entity.name,
+                              z ? DEFAULT_MAX_HEALTH : iMax,
+                              entity.team,
+                              z
+                      );
                   });
-              }
-
-              static Entity lambda$applyDamage$3(int i, Integer num, Entity entity) {
-                  int iMax = Math.max(
-                          0,
-                          entity.health - Math.min(DEFAULT_MAX_HEALTH, i)
-                  );
-
-                  boolean z = iMax == 0;
-
-                  return new Entity(
-                          entity.f210id,
-                          entity.f214x,
-                          entity.f215y,
-                          entity.f216z,
-                          entity.f211vx,
-                          entity.f212vy,
-                          entity.f213vz,
-                          entity.updatedAt,
-                          entity.name,
-                          z ? DEFAULT_MAX_HEALTH : iMax,
-                          entity.team,
-                          z
-                  );
               }
 
               public void updateEntity(final int i, final float f, final float f2, final float f3) {
@@ -295,100 +252,62 @@ jobs:
                   if (entity == null || horizontalDistance(entity.f214x, entity.f216z, f, f3) >= 0.35f) {
                       final long jUptimeMillis = SystemClock.uptimeMillis();
 
-                      this.entities.compute(Integer.valueOf(i), new BiFunction<Integer, Entity, Entity>() {
-                          @Override
-                          public Entity apply(Integer obj, Entity obj2) {
-                              return EspEntityStore.lambda$updateEntity$4(
+                      this.entities.compute(Integer.valueOf(i), (num, existingEntity) -> {
+                          float f4;
+                          float f5;
+
+                          if (existingEntity == null || jUptimeMillis - existingEntity.updatedAt > 1000) {
+                              return new Entity(
+                                      i, f, f2, f3,
+                                      0.0f, 0.0f, 0.0f,
                                       jUptimeMillis,
-                                      i,
-                                      f,
-                                      f2,
-                                      f3,
-                                      obj,
-                                      obj2
+                                      "E" + i,
+                                      DEFAULT_MAX_HEALTH,
+                                      0,
+                                      false
                               );
                           }
+
+                          if (horizontalDistance(existingEntity.f214x, existingEntity.f216z, f, f3) > 12.0f) {
+                              return new Entity(
+                                      i, f, f2, f3,
+                                      0.0f, 0.0f, 0.0f,
+                                      jUptimeMillis,
+                                      existingEntity.name,
+                                      existingEntity.health,
+                                      existingEntity.team,
+                                      existingEntity.dead
+                              );
+                          }
+
+                          long jMax = Math.max(8L, jUptimeMillis - existingEntity.updatedAt);
+                          float f6 = jMax / 1000.0f;
+                          float f7 = jMax < 80 ? 0.78f : 1.0f;
+                          float f8 = 1.0f - f7;
+
+                          float f9 = (((f - existingEntity.f214x) / f6) * f7) + (existingEntity.f211vx * f8);
+                          float f10 = (((f2 - existingEntity.f215y) / f6) * f7) + (existingEntity.f212vy * f8);
+                          float f11 = (f7 * ((f3 - existingEntity.f216z) / f6)) + (f8 * existingEntity.f213vz);
+
+                          if (Math.hypot(f9, f11) > 20.0d) {
+                              f5 = 0.0f;
+                              f4 = 0.0f;
+                          } else {
+                              f4 = f11;
+                              f5 = f9;
+                          }
+
+                          return new Entity(
+                                  i, f, f2, f3,
+                                  f5, f10, f4,
+                                  jUptimeMillis,
+                                  existingEntity.name,
+                                  existingEntity.health,
+                                  existingEntity.team,
+                                  existingEntity.dead
+                          );
                       });
                   }
-              }
-
-              static Entity lambda$updateEntity$4(
-                      long j,
-                      int i,
-                      float f,
-                      float f2,
-                      float f3,
-                      Integer num,
-                      Entity entity
-              ) {
-                  float f4;
-                  float f5;
-
-                  if (entity == null || j - entity.updatedAt > 1000) {
-                      return new Entity(
-                              i,
-                              f,
-                              f2,
-                              f3,
-                              0.0f,
-                              0.0f,
-                              0.0f,
-                              j,
-                              "E" + i,
-                              DEFAULT_MAX_HEALTH,
-                              0,
-                              false
-                      );
-                  }
-
-                  if (horizontalDistance(entity.f214x, entity.f216z, f, f3) > 12.0f) {
-                      return new Entity(
-                              i,
-                              f,
-                              f2,
-                              f3,
-                              0.0f,
-                              0.0f,
-                              0.0f,
-                              j,
-                              entity.name,
-                              entity.health,
-                              entity.team,
-                              entity.dead
-                      );
-                  }
-
-                  long jMax = Math.max(8L, j - entity.updatedAt);
-                  float f6 = jMax / 1000.0f;
-                  float f7 = jMax < 80 ? 0.78f : 1.0f;
-                  float f8 = 1.0f - f7;
-
-                  float f9 = (((f - entity.f214x) / f6) * f7) + (entity.f211vx * f8);
-                  float f10 = (((f2 - entity.f215y) / f6) * f7) + (entity.f212vy * f8);
-                  float f11 = (f7 * ((f3 - entity.f216z) / f6)) + (f8 * entity.f213vz);
-
-                  if (Math.hypot(f9, f11) > 20.0d) {
-                      f5 = 0.0f;
-                      f4 = 0.0f;
-                  } else {
-                      f4 = f11;
-                      f5 = f9;
-                  }
-
-                  return new Entity(
-                          i,
-                          f,
-                          f2,
-                          f3,
-                          f5,
-                          f10,
-                          f4,
-                          j,
-                          entity.name,
-                          entity.health,
-                          entity.team,
-                          entity.dead
-                  );
               }
 
               public static Snapshot fromNativeSnapshot(float[] fArr) {
@@ -906,14 +825,12 @@ jobs:
 
       - name: Compile Java ke DEX & Bungkus APK
         run: |
-          # Cari versi Build-Tools dan Platform SDK terbaru yang terpasang di Ubuntu runner
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
           PLATFORM=$(ls -d $ANDROID_HOME/platforms/android-* | sort -V | tail -n 1)
 
           echo "Menggunakan Build-Tools: $BUILD_TOOLS"
           echo "Menggunakan Platform: $PLATFORM"
 
-          # 1. Compile kode Java menjadi .class
           javac -source 1.8 -target 1.8 \
             -bootclasspath "$PLATFORM/android.jar" \
             -d build/classes \
@@ -921,20 +838,16 @@ jobs:
             src/com/jossmodz/esp/EspEntityStore.java \
             src/com/jossmodz/esp/FreezeController.java
 
-          # 2. Konversi file .class menjadi classes.dex menggunakan d8
           find build/classes -name "*.class" > classes.txt
           "$BUILD_TOOLS/d8" --lib "$PLATFORM/android.jar" --output build/dex @classes.txt
 
-          # 3. Buat kerangka APK dari AndroidManifest.xml menggunakan aapt2
           "$BUILD_TOOLS/aapt2" link -o build/unsigned.apk \
             -I "$PLATFORM/android.jar" \
             --manifest AndroidManifest.xml
 
-          # 4. Masukkan classes.dex ke dalam APK
           cp build/dex/classes.dex .
           zip -uj build/unsigned.apk classes.dex
 
-          # 5. Zipalign dan Sign APK agar valid di Android
           "$BUILD_TOOLS/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
 
           keytool -genkey -v -keystore debug.keystore -storepass android \
