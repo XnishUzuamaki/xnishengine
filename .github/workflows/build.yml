@@ -831,15 +831,15 @@ jobs:
           echo "Menggunakan Build-Tools: $BUILD_TOOLS"
           echo "Menggunakan Platform: $PLATFORM"
 
-          javac -source 1.8 -target 1.8 \
-            -bootclasspath "$PLATFORM/android.jar" \
+          javac --release 8 \
+            -classpath "$PLATFORM/android.jar" \
             -d build/classes \
             src/com/jossmodz/esp/NetworkLog.java \
             src/com/jossmodz/esp/EspEntityStore.java \
             src/com/jossmodz/esp/FreezeController.java
 
           find build/classes -name "*.class" > classes.txt
-          "$BUILD_TOOLS/d8" --lib "$PLATFORM/android.jar" --output build/dex @classes.txt
+          "$BUILD_TOOLS/d8" --min-api 24 --lib "$PLATFORM/android.jar" --output build/dex @classes.txt
 
           "$BUILD_TOOLS/aapt2" link -o build/unsigned.apk \
             -I "$PLATFORM/android.jar" \
