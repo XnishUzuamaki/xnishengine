@@ -642,4 +642,326 @@ jobs:
                               f5,
                               f8,
                               this.updatedAt,
-                              
+                              this.name,
+                              this.health,
+                              this.team,
+                              this.dead
+                      );
+                  }
+              }
+
+              public static final class Snapshot {
+                  public final float directionX;
+                  public final float directionY;
+                  public final float directionZ;
+                  public final List<Entity> entities;
+                  public final Entity localPlayer;
+                  public final float yawRadians;
+
+                  Snapshot(
+                          Entity entity,
+                          List<Entity> list,
+                          float f,
+                          float f2,
+                          float f3,
+                          float f4
+                  ) {
+                      this.localPlayer = entity;
+                      this.entities = list;
+                      this.yawRadians = f;
+                      this.directionX = f2;
+                      this.directionY = f3;
+                      this.directionZ = f4;
+                  }
+
+                  Snapshot(Entity entity, List<Entity> list, float f) {
+                      this(entity, list, f, Float.NaN, Float.NaN, Float.NaN);
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/jossmodz/esp/FreezeController.java
+          package com.jossmodz.esp;
+
+          import android.os.SystemClock;
+          import java.util.concurrent.ConcurrentHashMap;
+
+          public final class FreezeController {
+
+              private static final long FIRE_HOLD_MS = 700L;
+              private static final long SCOPE_HOLD_MS = 1800L;
+
+              private static final int CMD_STOP_ALL = 103;
+              private static final int CMD_FIRE_START = 104;
+              private static final int CMD_FIRE_STOP = 105;
+              private static final int CMD_SCOPE_START = 137;
+              private static final int CMD_SCOPE_STOP = 138;
+
+              private static volatile boolean aimLagEnabled;
+              private static volatile boolean autoFreezeEnabled;
+
+              private static final ConcurrentHashMap<Integer, Long> candidateLastLogAt = new ConcurrentHashMap<>();
+
+              private static volatile long firePulseEndsAt;
+              private static volatile boolean firing;
+
+              private static volatile long lastCandidateLogAt;
+              private static volatile long lastFeedLogAt;
+              private static volatile long lastFreezeLogAt;
+              private static volatile long lastPoseLogAt;
+
+              private static volatile boolean manualFreezeEnabled;
+
+              private static volatile long rewrittenPoseCount;
+
+              private static volatile boolean scopeFreezeEnabled;
+              private static volatile long scopePulseEndsAt;
+              private static volatile boolean scoping;
+
+              private static boolean isValidCommandId(int commandId) {
+                  return commandId > 0 && commandId <= 65535;
+              }
+
+              private FreezeController() {
+              }
+
+              public static void resetRuntime() {
+                  firing = false;
+                  scoping = false;
+                  firePulseEndsAt = 0L;
+                  scopePulseEndsAt = 0L;
+                  lastFreezeLogAt = 0L;
+                  lastPoseLogAt = 0L;
+                  lastCandidateLogAt = 0L;
+                  lastFeedLogAt = 0L;
+                  rewrittenPoseCount = 0L;
+                  candidateLastLogAt.clear();
+              }
+
+              public static void setManualFreeze(boolean enabled) {
+                  manualFreezeEnabled = enabled;
+                  NetworkLog.state("Freeze thủ công=" + enabled);
+              }
+
+              public static boolean isManualFreeze() {
+                  return manualFreezeEnabled;
+              }
+
+              public static void setAutoFreeze(boolean enabled) {
+                  autoFreezeEnabled = enabled;
+                  NetworkLog.state("Auto Freeze=" + enabled);
+              }
+
+              public static void setAimLag(boolean enabled) {
+                  aimLagEnabled = enabled;
+                  NetworkLog.state("Aim Lag=" + enabled);
+              }
+
+              public static void setScopeFreeze(boolean enabled) {
+                  scopeFreezeEnabled = enabled;
+                  NetworkLog.state("Scope Freeze=" + enabled);
+              }
+
+              public static void observeCommand(int commandId, byte[] body, boolean serverToClient) {
+                  if (!isValidCommandId(commandId)) {
+                      return;
+                  }
+
+                  int bodyLength = body == null ? 0 : body.length;
+                  long now = SystemClock.elapsedRealtime();
+
+                  if (!serverToClient) {
+                      if (commandId == CMD_SCOPE_START) {
+                          scoping = true;
+                          scopePulseEndsAt = SCOPE_HOLD_MS + now;
+                      } else if (commandId == CMD_SCOPE_STOP) {
+                          scoping = false;
+                          scopePulseEndsAt = 0L;
+                      } else {
+                          switch (commandId) {
+                              case CMD_STOP_ALL:
+                                  firing = false;
+                                  scoping = false;
+                                  firePulseEndsAt = 0L;
+                                  scopePulseEndsAt = 0L;
+                                  break;
+
+                              case CMD_FIRE_START:
+                                  firing = true;
+                                  firePulseEndsAt = FIRE_HOLD_MS + now;
+                                  break;
+
+                              case CMD_FIRE_STOP:
+                                  firing = false;
+                                  firePulseEndsAt = 0L;
+                                  break;
+                          }
+                      }
+
+                      NetworkLog.state(
+                              "Lag state cmd=" + commandId +
+                              " " + (serverToClient ? "S2C" : "C2S") +
+                              " body=" + bodyLength +
+                              " fire=" + isFireActive(now) +
+                              " scope=" + isScopeActive(now)
+                      );
+                      return;
+                  }
+
+                  if (aimLagEnabled) {
+                      logCandidate(commandId, bodyLength, serverToClient, now);
+                  }
+              }
+
+              public static void observePoseCommand(String poseInfo, int commandId) {
+                  long now = SystemClock.elapsedRealtime();
+
+                  if (now - lastPoseLogAt < 1000) {
+                      return;
+                  }
+
+                  lastPoseLogAt = now;
+
+                  boolean fireActive = isFireActive(now);
+                  boolean scopeActive = isScopeActive(now);
+
+                  boolean autoFreezeActive = aimLagEnabled && (
+                          (autoFreezeEnabled && fireActive) ||
+                          (scopeFreezeEnabled && scopeActive)
+                  );
+
+                  boolean freezeActive = manualFreezeEnabled || autoFreezeActive;
+
+                  NetworkLog.state(
+                          "Lag pose C2S cmd=" + commandId +
+                          " freeze=" + freezeActive +
+                          " manual=" + manualFreezeEnabled +
+                          " aim=" + aimLagEnabled +
+                          " auto=" + autoFreezeEnabled +
+                          " fire=" + fireActive +
+                          " scopeFlag=" + scopeFreezeEnabled +
+                          " scoping=" + scopeActive +
+                          " " + poseInfo
+                  );
+              }
+
+              public static boolean isFreezeActive() {
+                  long now = SystemClock.elapsedRealtime();
+
+                  return manualFreezeEnabled || (
+                          aimLagEnabled && (
+                                  (autoFreezeEnabled && isFireActive(now)) ||
+                                  (scopeFreezeEnabled && isScopeActive(now))
+                          )
+                  );
+              }
+
+              public static void recordDownlinkRewrite(String info, int commandId, int entityCount) {
+                  if (entityCount <= 0) {
+                      return;
+                  }
+
+                  long now = SystemClock.elapsedRealtime();
+                  long total = rewrittenPoseCount + 1L;
+                  rewrittenPoseCount = total;
+
+                  if (now - lastFreezeLogAt >= 1000) {
+                      lastFreezeLogAt = now;
+                      NetworkLog.state(
+                              "Freeze rewrite S2C cmd=" + commandId +
+                              " entities=" + entityCount +
+                              " total=" + total +
+                              " " + info
+                      );
+                  }
+              }
+
+              public static void recordDownlinkFeed(
+                      String info,
+                      int commandId,
+                      int entityCount,
+                      int liveCount,
+                      int heldCount,
+                      boolean active
+              ) {
+                  if (entityCount <= 0) {
+                      return;
+                  }
+
+                  if (!manualFreezeEnabled && !aimLagEnabled) {
+                      return;
+                  }
+
+                  long now = SystemClock.elapsedRealtime();
+
+                  if (now - lastFeedLogAt < 1000) {
+                      return;
+                  }
+
+                  lastFeedLogAt = now;
+
+                  NetworkLog.state(
+                          "Freeze feed S2C cmd=" + commandId +
+                          " entities=" + entityCount +
+                          " live=" + liveCount +
+                          " held=" + heldCount +
+                          " active=" + active +
+                          " fire=" + isFireActive(now) +
+                          " scope=" + isScopeActive(now) +
+                          " " + info
+                  );
+              }
+
+              private static boolean isFireActive(long now) {
+                  return firing || now < firePulseEndsAt;
+              }
+
+              private static boolean isScopeActive(long now) {
+                  return scoping || now < scopePulseEndsAt;
+              }
+
+              private static void logCandidate(
+                      int commandId,
+                      int bodyLength,
+                      boolean serverToClient,
+                      long now
+              ) {
+                  if (commandId == 2001 || commandId == 2012) {
+                      return;
+                  }
+
+                  if ((commandId >= 101 && commandId <= 105) ||
+                          commandId == CMD_SCOPE_START ||
+                          commandId == CMD_SCOPE_STOP) {
+                      return;
+                  }
+
+                  Long lastLogAt = candidateLastLogAt.get(commandId);
+
+                  boolean canLogCommand = lastLogAt == null || now - lastLogAt >= 2500;
+                  boolean canLogGlobal = now - lastCandidateLogAt >= 200;
+
+                  if (canLogCommand && canLogGlobal) {
+                      candidateLastLogAt.put(commandId, now);
+                      lastCandidateLogAt = now;
+
+                      NetworkLog.state(
+                              "Aim candidate " + (serverToClient ? "S2C" : "C2S") +
+                              " cmd=" + commandId +
+                              " body=" + bodyLength
+                      );
+                  }
+              }
+          }
+          EOF
+
+      - name: Build Debug APK with Gradle
+        uses: gradle/actions/setup-gradle@v3
+      - run: gradle assembleDebug
+
+      - name: Upload Compiled APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: EspFreezeModule-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
